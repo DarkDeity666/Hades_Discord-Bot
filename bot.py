@@ -14,6 +14,7 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 intents = discord.Intents.default()
 intents.messages = True
 intents.guilds = True
+
 class MyBot(discord.Client):
     def __init__(self):
         super().__init__(intents=intents)
@@ -21,9 +22,10 @@ class MyBot(discord.Client):
 
 bot = MyBot()
 
-# Load or initialize economy data
+# File paths
 DATA_FILE = "./data/economy.json"
 
+# Ensure the data directory exists
 if not os.path.exists("data"):
     os.makedirs("data")
 
@@ -31,20 +33,20 @@ if not os.path.exists(DATA_FILE):
     with open(DATA_FILE, "w") as f:
         json.dump({}, f)
 
+# Load and save economy data
 def load_data():
     with open(DATA_FILE, "r") as f:
         return json.load(f)
 
 def save_data(data):
     with open(DATA_FILE, "w") as f:
-        json.dump(data, f)
+        json.dump(data, f, indent=4)
 
 # Logging utility
 def log_activity(guild, message):
     logs_category_name = "━━╴Logs╶━━"
     log_channel_name = "hermes-log"
-    
-    # Get the category and channel
+
     logs_category = discord.utils.get(guild.categories, name=logs_category_name)
     if not logs_category:
         return
@@ -52,198 +54,280 @@ def log_activity(guild, message):
     if log_channel:
         bot.loop.create_task(log_channel.send(message))
 
-# DM welcome message
-async def send_welcome_dm(user):
-    try:
-        await user.send(
-            "Welcome to Hermes Economy Simulator!\n\n"
-            "**How to Play:**\n"
-            "- Use `/work` to earn money.\n"
-            "- Gamble your earnings with `/gamble [amount]`.\n"
-            "- Gift money to others with `/gift [@user] [amount]`.\n"
-            "- View leaderboards with `/leaderboard`.\n"
-            "- Random events can happen with `/event`.\n\n"
-            "**Rules:**\n"
-            "- No cheating or exploiting bugs.\n"
-            "- Play fair and have fun!"
-        )
-    except discord.Forbidden:
-        pass  # Cannot send a DM to the user
-
-# Weekly leaderboard announcement
-@tasks.loop(weeks=1)
-async def post_weekly_leaderboard():
-    for guild in bot.guilds:
-        category_name = "━━╴Hermes- Economy ╶━━"
-        channel_name = "⫸▕▏weekly-leaderboard"
-
-        category = discord.utils.get(guild.categories, name=category_name)
-        if not category:
-            continue
-        channel = discord.utils.get(category.text_channels, name=channel_name)
-        if not channel:
-            continue
-
-        data = load_data()
-        sorted_users = sorted(data.items(), key=lambda x: x[1].get("balance", 0), reverse=True)
-        leaderboard = "\n".join([f"<@{user}>: ${info['balance']}" for user, info in sorted_users[:10]])
-        await channel.send(f"**Weekly Leaderboard:**\n{leaderboard}")
-
-# Monthly leaderboard announcement
-@tasks.loop(weeks=4)
-async def post_monthly_leaderboard():
-    for guild in bot.guilds:
-        category_name = "━━╴Hermes- Economy ╶━━"
-        channel_name = "⫸▕▏monthly-leaderboard"
-
-        category = discord.utils.get(guild.categories, name=category_name)
-        if not category:
-            continue
-        channel = discord.utils.get(category.text_channels, name=channel_name)
-        if not channel:
-            continue
-
-        data = load_data()
-        sorted_users = sorted(data.items(), key=lambda x: x[1].get("balance", 0), reverse=True)
-        leaderboard = "\n".join([f"<@{user}>: ${info['balance']}" for user, info in sorted_users[:10]])
-        top_5_rewards = 50  # Example bonus credits for top 5 users
-
-        for user, _ in sorted_users[:5]:
-            if user in data:
-                data[user]["balance"] += top_5_rewards
-
+# Utility to initialize user data
+def initialize_user(data, user_id):
+    if user_id not in data:
+        data[user_id] = {
+            "balance": 0,
+            "bank": 0,
+            "daily_streak": 0,
+            "last_daily": None,
+            "loan": 0,
+            "loan_interest_rate": 0.1,  # 10% daily interest
+            "taxes_due": 0
+        }
         save_data(data)
-        await channel.send(
-            f"**Monthly Leaderboard:**\n{leaderboard}\n\n"
-            f"The top 5 users received a bonus of ${top_5_rewards} each!"
-        )
 
-# Slash Commands
 
-@bot.event
-async def on_ready():
-    print(f"Bot connected as {bot.user}")
-    post_weekly_leaderboard.start()
-    post_monthly_leaderboard.start()
-    await bot.tree.sync()
-
-@bot.tree.command(name="balance", description="Check your balance.")
-async def balance(interaction: discord.Interaction):
-    """Check your balance."""
+# Daily Login Rewards
+@bot.tree.command(name="daily", description="Claim your daily login reward.")
+async def daily(interaction: discord.Interaction):
     data = load_data()
-    user = str(interaction.user.id)
-    if user not in data:
-        data[user] = {"balance": 0}
-        save_data(data)
-        await send_welcome_dm(interaction.user)
-    balance = data[user]["balance"]
-    await interaction.response.send_message(f"{interaction.user.name}, you have ${balance}!")
-
-    # Log the activity
-    log_activity(interaction.guild, f"{interaction.user.name} checked their balance.")
-
-@bot.tree.command(name="work", description="Earn money through work.")
-async def work(interaction: discord.Interaction):
-    """Earn money through work."""
-    data = load_data()
-    user = str(interaction.user.id)
-    if user not in data:
-        data[user] = {"balance": 0}
-        await send_welcome_dm(interaction.user)
-    amount = random.randint(10, 50)
-    data[user]["balance"] += amount
-    save_data(data)
-    await interaction.response.send_message(f"{interaction.user.name}, you worked hard and earned ${amount}!")
-
-    # Log the activity
-    log_activity(interaction.guild, f"{interaction.user.name} worked and earned ${amount}.")
-
-@bot.tree.command(name="gamble", description="Gamble an amount of money.")
-async def gamble(interaction: discord.Interaction, amount: int):
-    """Gamble an amount of money."""
-    data = load_data()
-    user = str(interaction.user.id)
-    if user not in data:
-        data[user] = {"balance": 0}
-        await send_welcome_dm(interaction.user)
+    user_id = str(interaction.user.id)
+    initialize_user(data, user_id)
     
-    if amount <= 0:
-        await interaction.response.send_message("Please enter a positive amount to gamble.", ephemeral=True)
-        return
-    
-    if data[user]["balance"] < amount:
-        await interaction.response.send_message("You don't have enough money to gamble that amount.", ephemeral=True)
-        return
-    
-    # Gamble logic
-    outcome = random.choice(["win", "lose"])
-    if outcome == "win":
-        winnings = amount * 2
-        data[user]["balance"] += winnings - amount
-        result_message = f"Congratulations, {interaction.user.name}! You gambled ${amount} and won ${winnings}!"
-    else:
-        data[user]["balance"] -= amount
-        result_message = f"Sorry, {interaction.user.name}, you gambled ${amount} and lost it all."
+    user_data = data[user_id]
+    streak_bonus = 20 * user_data["daily_streak"]  # $20 per day streak
+    reward = 20 + streak_bonus
 
-    save_data(data)
-    await interaction.response.send_message(result_message)
-
-    # Log the activity
-    log_activity(interaction.guild, f"{interaction.user.name} gambled ${amount} and {'won' if outcome == 'win' else 'lost'}.")
-
-@bot.tree.command(name="gift", description="Gift money to another user.")
-async def gift(interaction: discord.Interaction, member: discord.Member, amount: int):
-    """Gift money to another user."""
-    if member == interaction.user:
-        await interaction.response.send_message("You can't gift money to yourself.", ephemeral=True)
-        return
-
-    data = load_data()
-    sender = str(interaction.user.id)
-    receiver = str(member.id)
-
-    if sender not in data:
-        data[sender] = {"balance": 0}
-        await send_welcome_dm(interaction.user)
-
-    if receiver not in data:
-        data[receiver] = {"balance": 0}
-        await send_welcome_dm(member)
-
-    if amount <= 0:
-        await interaction.response.send_message("Please enter a positive amount to gift.", ephemeral=True)
-        return
-
-    if data[sender]["balance"] < amount:
-        await interaction.response.send_message("You don't have enough money to gift that amount.", ephemeral=True)
-        return
-
-    # Gift logic
-    data[sender]["balance"] -= amount
-    data[receiver]["balance"] += amount
+    user_data["balance"] += reward
+    user_data["daily_streak"] += 1
     save_data(data)
 
-    await interaction.response.send_message(f"{interaction.user.name} gifted ${amount} to {member.name}!")
-
-    # Log the activity
-    log_activity(interaction.guild, f"{interaction.user.name} gifted ${amount} to {member.name}.")
-
-@bot.tree.command(name="leaderboard", description="View the top 10 users by balance.")
-async def leaderboard(interaction: discord.Interaction):
-    """View the top 10 users by balance."""
-    data = load_data()
-    if not data:
-        await interaction.response.send_message("No data available yet.")
-        return
-
-    sorted_users = sorted(data.items(), key=lambda x: x[1].get("balance", 0), reverse=True)
-    leaderboard = "\n".join(
-        [f"{index + 1}. <@{user}>: ${info['balance']}" for index, (user, info) in enumerate(sorted_users[:10])]
+    await interaction.response.send_message(
+        f"{interaction.user.name}, you claimed your daily reward of ${reward}! "
+        f"(Current streak: {user_data['daily_streak']} days)"
     )
+    log_activity(interaction.guild, f"{interaction.user.name} claimed their daily reward of ${reward}.")
 
-    await interaction.response.send_message(f"**Leaderboard:**\n{leaderboard}")
+# Shop System
+@bot.tree.command(name="shop", description="View and purchase virtual items.")
+async def shop(interaction: discord.Interaction):
+    shop_items = {
+        "lottery_ticket": {"name": "Lottery Ticket", "price": 50, "description": "Chance to win $500."},
+        "multiplier_boost": {"name": "Multiplier Boost", "price": 200, "description": "Doubles work rewards for 1 hour."},
+        "lucky_charm": {"name": "Lucky Charm", "price": 100, "description": "Increases gambling win chances."}
+    }
 
-    # Log the activity
-    log_activity(interaction.guild, f"{interaction.user.name} viewed the leaderboard.")
+    shop_list = "\n".join([f"{key}: {item['name']} - ${item['price']} ({item['description']})" for key, item in shop_items.items()])
+    await interaction.response.send_message(f"**Shop Items:**\n{shop_list}")
+
+# Bank System
+@bot.tree.command(name="deposit", description="Deposit money into your bank account.")
+async def deposit(interaction: discord.Interaction, amount: int):
+    data = load_data()
+    user_id = str(interaction.user.id)
+    initialize_user(data, user_id)
+
+    if amount <= 0:
+        await interaction.response.send_message("Please enter a positive amount to deposit.", ephemeral=True)
+        return
+
+    if data[user_id]["balance"] < amount:
+        await interaction.response.send_message("You don't have enough money to deposit that amount.", ephemeral=True)
+        return
+
+    data[user_id]["balance"] -= amount
+    data[user_id]["bank"] += amount
+    save_data(data)
+
+    await interaction.response.send_message(f"{interaction.user.name}, you successfully deposited ${amount} into your bank account.")
+    log_activity(interaction.guild, f"{interaction.user.name} deposited ${amount} into their bank account.")
+
+@bot.tree.command(name="withdraw", description="Withdraw money from your bank account.")
+async def withdraw(interaction: discord.Interaction, amount: int):
+    data = load_data()
+    user_id = str(interaction.user.id)
+    initialize_user(data, user_id)
+
+    if amount <= 0:
+        await interaction.response.send_message("Please enter a positive amount to withdraw.", ephemeral=True)
+        return
+
+    if data[user_id]["bank"] < amount:
+        await interaction.response.send_message("You don't have enough money in the bank to withdraw that amount.", ephemeral=True)
+        return
+
+    data[user_id]["balance"] += amount
+    data[user_id]["bank"] -= amount
+    save_data(data)
+
+    await interaction.response.send_message(f"{interaction.user.name}, you successfully withdrew ${amount} from your bank account.")
+    log_activity(interaction.guild, f"{interaction.user.name} withdrew ${amount} from their bank account.")
+
+@bot.tree.command(name="interest", description="Check your bank interest.")
+async def interest(interaction: discord.Interaction):
+    data = load_data()
+    user_id = str(interaction.user.id)
+    initialize_user(data, user_id)
+
+    # Calculate interest (e.g., 5% of the bank balance)
+    interest = data[user_id]["bank"] * 0.05
+    data[user_id]["balance"] += interest
+    save_data(data)
+
+    await interaction.response.send_message(f"{interaction.user.name}, you earned ${interest} in interest from your bank balance!")
+    log_activity(interaction.guild, f"{interaction.user.name} earned ${interest} in bank interest.")
+
+# Tax System
+@bot.tree.command(name="checktax", description="Check your tax dues.")
+async def checktax(interaction: discord.Interaction):
+    data = load_data()
+    user_id = str(interaction.user.id)
+    initialize_user(data, user_id)
+
+    taxes_due = data[user_id]["taxes_due"]
+    await interaction.response.send_message(f"{interaction.user.name}, you owe ${taxes_due} in taxes.")
+
+@bot.tree.command(name="paytax", description="Pay your taxes.")
+async def paytax(interaction: discord.Interaction):
+    data = load_data()
+    user_id = str(interaction.user.id)
+    initialize_user(data, user_id)
+
+    taxes_due = data[user_id]["taxes_due"]
+    if taxes_due == 0:
+        await interaction.response.send_message(f"{interaction.user.name}, you don't owe any taxes.")
+        return
+
+    if data[user_id]["balance"] < taxes_due:
+        await interaction.response.send_message(f"{interaction.user.name}, you don't have enough balance to pay your taxes.", ephemeral=True)
+        return
+
+    data[user_id]["balance"] -= taxes_due
+    data[user_id]["taxes_due"] = 0  # Tax cleared
+    save_data(data)
+
+    await interaction.response.send_message(f"{interaction.user.name}, you successfully paid ${taxes_due} in taxes.")
+    log_activity(interaction.guild, f"{interaction.user.name} paid ${taxes_due} in taxes.")
+
+# Loans System
+@bot.tree.command(name="loan", description="Take out a loan.")
+async def loan(interaction: discord.Interaction, amount: int):
+    data = load_data()
+    user_id = str(interaction.user.id)
+    initialize_user(data, user_id)
+
+    if amount <= 0:
+        await interaction.response.send_message("Please enter a positive amount for the loan.", ephemeral=True)
+        return
+
+    # Loan logic: User can take a loan up to a certain limit (e.g., 1000)
+    max_loan = 1000
+    if data[user_id]["loan"] > max_loan:
+        await interaction.response.send_message(f"{interaction.user.name}, you already have the maximum loan limit.", ephemeral=True)
+        return
+
+    if data[user_id]["loan"] + amount > max_loan:
+        await interaction.response.send_message(f"{interaction.user.name}, you cannot take a loan greater than ${max_loan}.", ephemeral=True)
+        return
+
+    # Issue the loan
+    data[user_id]["loan"] += amount
+    data[user_id]["balance"] += amount
+    save_data(data)
+
+    await interaction.response.send_message(f"{interaction.user.name}, you have taken a loan of ${amount}.")
+    log_activity(interaction.guild, f"{interaction.user.name} took a loan of ${amount}.")
+
+@bot.tree.command(name="repayloan", description="Repay part of your loan.")
+async def repayloan(interaction: discord.Interaction, amount: int):
+    data = load_data()
+    user_id = str(interaction.user.id)
+    initialize_user(data, user_id)
+
+    if amount <= 0:
+        await interaction.response.send_message("Please enter a positive amount to repay.", ephemeral=True)
+        return
+
+    if data[user_id]["loan"] < amount:
+        await interaction.response.send_message(f"{interaction.user.name}, you don't owe that much on your loan.", ephemeral=True)
+        return
+
+    if data[user_id]["balance"] < amount:
+        await interaction.response.send_message(f"{interaction.user.name}, you don't have enough balance to repay that amount.", ephemeral=True)
+        return
+
+    data[user_id]["loan"] -= amount
+    data[user_id]["balance"] -= amount
+    save_data(data)
+
+    await interaction.response.send_message(f"{interaction.user.name}, you successfully repaid ${amount} of your loan.")
+    log_activity(interaction.guild, f"{interaction.user.name} repaid ${amount} of their loan.")
+
+@bot.tree.command(name="loanstatus", description="Check your current loan status.")
+async def loanstatus(interaction: discord.Interaction):
+    data = load_data()
+    user_id = str(interaction.user.id)
+    initialize_user(data, user_id)
+
+    loan_balance = data[user_id]["loan"]
+    await interaction.response.send_message(f"{interaction.user.name}, your current loan balance is ${loan_balance}.")
+
+
+@tasks.loop(hours=24)
+async def daily_interest_task():
+    data = load_data()
+    for user_id, user_data in data.items():
+        # Bank interest
+        bank_balance = user_data["bank"]
+        if bank_balance > 0:
+            interest = bank_balance * 0.05  # 5% interest
+            user_data["balance"] += interest
+            log_message = f"User {user_id} earned ${interest:.2f} interest on their bank balance."
+
+        # Loan interest
+        loan_balance = user_data["loan"]
+        if loan_balance > 0:
+            loan_interest = loan_balance * user_data["loan_interest_rate"]
+            user_data["loan"] += loan_interest
+            log_message = f"User {user_id}'s loan increased by ${loan_interest:.2f} due to interest."
+
+        save_data(data)
+        # Post logs to the log channel
+        for guild in bot.guilds:
+            log_activity(guild, log_message)
+
+@bot.tree.command(name="deposit", description="Deposit money into your bank account with interest benefits.")
+async def deposit(interaction: discord.Interaction, amount: int):
+    data = load_data()
+    user_id = str(interaction.user.id)
+    initialize_user(data, user_id)
+
+    if amount <= 0:
+        await interaction.response.send_message("Enter a positive amount to deposit.", ephemeral=True)
+        return
+
+    if data[user_id]["balance"] < amount:
+        await interaction.response.send_message("Insufficient funds to deposit.", ephemeral=True)
+        return
+
+    # Deposit money into the bank
+    data[user_id]["balance"] -= amount
+    data[user_id]["bank"] += amount
+    save_data(data)
+
+    await interaction.response.send_message(f"Deposited ${amount} to your bank account. Your money is safe and earns interest!")
+    log_activity(interaction.guild, f"{interaction.user.name} deposited ${amount} into their bank.")
+
+@tasks.loop(hours=24)
+async def loan_status_task():
+    data = load_data()
+    for user_id, user_data in data.items():
+        loan_balance = user_data["loan"]
+        if loan_balance > 0:
+            log_message = f"User {user_id} has an outstanding loan of ${loan_balance:.2f}."
+            for guild in bot.guilds:
+                log_activity(guild, log_message)
+
+# Update Rules Command
+@bot.tree.command(name="rules", description="View the updated rules.")
+async def rules(interaction: discord.Interaction):
+    rules_message = (
+        "**Hermes Economy Simulator - Rules**\n"
+        "- No cheating, exploiting, or abusing bugs.\n"
+        "- Respect all other players and staff.\n"
+        "- No spamming or excessive messaging.\n"
+        "- Do not share personal or sensitive information.\n"
+        "- Be mindful of your balance, taxes, loans, and spending.\n\n"
+        "**Game Features:**\n"
+        "- Earn money by working, gambling, and completing events.\n"
+        "- Check your balance, work, gamble, and give gifts to others.\n"
+        "- Visit the shop to buy virtual items.\n"
+        "- Deposit and withdraw money from your bank.\n"
+        "- Pay taxes and take out loans with interest.\n"
+        "- Check leaderboards and claim your daily rewards.\n"
+    )
+    await interaction.response.send_message(rules_message)
 
 bot.run(TOKEN)
