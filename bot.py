@@ -278,27 +278,27 @@ async def daily_interest_task():
         for guild in bot.guilds:
             log_activity(guild, log_message)
 
-@bot.tree.command(name="deposit", description="Deposit money into your bank account with interest benefits.")
-async def deposit(interaction: discord.Interaction, amount: int):
-    data = load_data()
-    user_id = str(interaction.user.id)
-    initialize_user(data, user_id)
+# @bot.tree.command(name="deposit", description="Deposit money into your bank account with interest benefits.")
+# async def deposit(interaction: discord.Interaction, amount: int):
+#     data = load_data()
+#     user_id = str(interaction.user.id)
+#     initialize_user(data, user_id)
 
-    if amount <= 0:
-        await interaction.response.send_message("Enter a positive amount to deposit.", ephemeral=True)
-        return
+#     if amount <= 0:
+#         await interaction.response.send_message("Enter a positive amount to deposit.", ephemeral=True)
+#         return
 
-    if data[user_id]["balance"] < amount:
-        await interaction.response.send_message("Insufficient funds to deposit.", ephemeral=True)
-        return
+#     if data[user_id]["balance"] < amount:
+#         await interaction.response.send_message("Insufficient funds to deposit.", ephemeral=True)
+#         return
 
-    # Deposit money into the bank
-    data[user_id]["balance"] -= amount
-    data[user_id]["bank"] += amount
-    save_data(data)
+#     # Deposit money into the bank
+#     data[user_id]["balance"] -= amount
+#     data[user_id]["bank"] += amount
+#     save_data(data)
 
-    await interaction.response.send_message(f"Deposited ${amount} to your bank account. Your money is safe and earns interest!")
-    log_activity(interaction.guild, f"{interaction.user.name} deposited ${amount} into their bank.")
+#     await interaction.response.send_message(f"Deposited ${amount} to your bank account. Your money is safe and earns interest!")
+#     log_activity(interaction.guild, f"{interaction.user.name} deposited ${amount} into their bank.")
 
 @tasks.loop(hours=24)
 async def loan_status_task():
@@ -309,6 +309,44 @@ async def loan_status_task():
             log_message = f"User {user_id} has an outstanding loan of ${loan_balance:.2f}."
             for guild in bot.guilds:
                 log_activity(guild, log_message)
+
+from itertools import cycle
+
+# List of statuses
+statuses = cycle([
+    # "Moderating the server 🛡️",
+    "Managing the economy 💰",
+    "Counting coins 🪙",
+    "Issuing daily rewards 🎁",
+    "Watching over the rules 📜",
+    "Adding Interest 🏦",
+    "Processing loans 💸",
+    "Calculating taxes 📊",
+    "Updating the shop 🛒",
+    "Logging activities 📝",
+    "warning for replaying the taxes ⚠️",
+    "sending rules to the new members 📜",
+    "checking the loan status 💸",
+    "checking the bank balance 🏦",
+    "checking the daily rewards 🎁",
+    "checking the taxes 📊",
+    "checking the shop 🛒",
+    "checking the logs 📝",
+    "checking the rules 📜",
+    " Paying the daily rewards 🎁",
+    " Paying the taxes 📊",
+    " Paying the loan 💸",
+])
+
+@tasks.loop(seconds=30)  # Change status every 30 seconds
+async def change_status():
+    await bot.change_presence(activity=discord.Game(next(statuses)))
+
+# Start the status loop when the bot is ready
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user}")
+    change_status.start()
 
 # Update Rules Command
 @bot.tree.command(name="rules", description="View the updated rules.")
